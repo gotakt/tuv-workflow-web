@@ -1,7 +1,7 @@
 {
   "name": "tuv-workflow-web",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,12 +13,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "backup": "./scripts/backup.sh",
-    "restore": "./scripts/restore.sh",
-    "restore-drill": "./scripts/restore-drill.sh",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
-    "e2e:report": "playwright show-report"
+    "e2e:report": "playwright show-report",
+    "backup": "./scripts/backup.sh",
+    "restore": "./scripts/restore.sh",
+    "restore-drill": "./scripts/restore-drill.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",

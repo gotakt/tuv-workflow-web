@@ -1,10 +1,10 @@
 [package]
 name = "tuv-workflow"
-version = "0.1.0"
+version = "1.0.0"
 description = "TÜV Prüfstelle Pro — Desktop-Wrapper"
 authors = ["Marwan Saleh", "Oussama Hlayhel"]
 license = "MIT"
-repository = "https://github.com/maroxd3/tuv-workflow-web"
+repository = "https://github.com/gotakt/tuv-workflow-web"
 edition = "2021"
 rust-version = "1.77.2"
 

@@ -1,22 +1,18 @@
 /**
  * WF-01 Defense-in-Depth: alle drei Verteidigungs-Layer sowie das
- * behoben=TRUE-Verhalten gegen den laufenden Docker-Stack pruefen.
+ * behoben=TRUE-Verhalten gegen einen laufenden Stack pruefen.
  *
- * Vorbedingung: Stack muss laufen (`docker compose up -d`). Wenn nicht,
- * werden die Tests uebersprungen, damit `npm test` lokal ohne Docker nicht
- * fehlschlaegt.
+ * Vorbedingung: API + MariaDB muessen laufen (Compose-Stack, CI-Service oder
+ * lokales Setup). Wenn nicht, werden die Tests uebersprungen, damit
+ * `npm test` lokal ohne DB nicht fehlschlaegt.
  *
  * @vitest-environment node
  */
 import "dotenv/config";
 import { describe, it, expect, beforeEach } from "vitest";
-import { execSync } from "node:child_process";
+import { resolveSqlRunner } from "./dbCli.js";
 
 const API = process.env.TUV_API_URL || "http://localhost:8787";
-const MARIADB_CONTAINER = process.env.TUV_DB_CONTAINER || "tuv-mariadb";
-const MARIADB_USER = process.env.MARIADB_USER || "tuv_app";
-const MARIADB_PASSWORD = process.env.MARIADB_PASSWORD || "tuv_app_pw";
-const MARIADB_DATABASE = process.env.MARIADB_DATABASE || "tuv_workflow";
 
 // Pre-flight: pruefen, ob der Docker-Stack laeuft. Top-Level await, weil
 // describe.skipIf(...) die Bedingung bei Test-Collection auswertet — wir
@@ -92,23 +88,19 @@ beforeEach(async () => {
   await seedDemo();
 });
 
-const skipSqlBypass = process.env.TUV_SKIP_SQL_BYPASS === "1";
+// Layer 3 braucht einen Weg, roh an der API vorbei SQL zu schicken. Welcher
+// das ist (Client ueber TCP oder docker exec), entscheidet dbCli.js zur
+// Laufzeit. Nur wenn es gar keinen gibt, wird dieser eine Test uebersprungen
+// — TUV_SKIP_SQL_BYPASS=1 erzwingt das zusaetzlich von aussen.
+const sqlRunner = stackUp && process.env.TUV_SKIP_SQL_BYPASS !== "1" ? resolveSqlRunner() : null;
 
 describe.skipIf(!stackUp)("WF-01 Defense-in-Depth", () => {
-  it.skipIf(skipSqlBypass)("Layer 3 (DB-Trigger): direkter SQL-UPDATE wird abgelehnt", async () => {
+  it.skipIf(!sqlRunner)("Layer 3 (DB-Trigger): direkter SQL-UPDATE wird abgelehnt", async () => {
     const { termin } = await findTerminWithUnbehobenBlocker();
 
-    let stderr = "";
-    let exitCode = 0;
-    try {
-      execSync(
-        `docker exec ${MARIADB_CONTAINER} mariadb -u ${MARIADB_USER} -p${MARIADB_PASSWORD} ${MARIADB_DATABASE} -e "UPDATE termin SET status_code='Bestanden' WHERE termin_id='${termin.terminId}';"`,
-        { stdio: ["ignore", "pipe", "pipe"] },
-      );
-    } catch (err) {
-      stderr = String(err.stderr || err.message);
-      exitCode = err.status ?? 1;
-    }
+    const { exitCode, stderr } = sqlRunner.run(
+      `UPDATE termin SET status_code='Bestanden' WHERE termin_id='${termin.terminId}';`,
+    );
 
     expect(exitCode).not.toBe(0);
     expect(stderr).toMatch(/ERROR 1644.*45000/);

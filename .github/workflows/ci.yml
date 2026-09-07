@@ -40,12 +40,6 @@ jobs:
       MARIADB_PASSWORD: tuv_app_pw
       MARIADB_DATABASE: tuv_workflow
       API_PORT: 8787
-      # Der SQL-Bypass-Test in wf01.test.js benutzt docker exec gegen den
-      # lokalen Compose-Stack. In CI gibt es keinen "tuv-mariadb"-Container —
-      # daher diesen einen Test ueberspringen. Die anderen 6 Layer-Tests
-      # (API-Layer, Trigger via API, Status-Endpoint, behoben-Semantik,
-      # Auto-Demotion) laufen vollwertig gegen die Service-DB.
-      TUV_SKIP_SQL_BYPASS: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +49,15 @@ jobs:
         with:
           node-version: 20
           cache: npm
+
+      # Der Layer-3-Test in wf01.test.js schickt rohes SQL an der API vorbei
+      # an die Datenbank — genau das, was ein DB-Tool oder ein Angreifer mit
+      # DB-Zugang tun wuerde. Frueher lief das per `docker exec` gegen den
+      # Compose-Stack und war in CI ausgenommen; jetzt reicht ein Client
+      # (server/tests/dbCli.js waehlt den Weg zur Laufzeit). Damit laeuft der
+      # wichtigste WF-01-Layer in der Pipeline mit, statt nur lokal.
+      - name: Install MariaDB client (fuer den SQL-Bypass-Test)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mariadb-client
 
       - name: Install dependencies
         run: npm ci
@@ -83,8 +86,19 @@ jobs:
           echo "API did not become healthy in 30s." >&2
           exit 1
 
-      - name: Test (incl. WF-01 integration tests)
+      - name: Test (incl. WF-01 integration tests, alle 3 Defense-Layer)
         run: npm test
+
+      # Beweis, dass der Layer-3-Test in dieser Pipeline wirklich gelaufen ist
+      # und nicht still uebersprungen wurde. Ein uebersprungener Test sieht in
+      # der Zusammenfassung genauso gruen aus wie ein bestandener.
+      - name: Assert Layer-3-Test lief (kein stiller Skip)
+        run: |
+          npx vitest run server/tests/wf01.test.js --reporter=verbose 2>&1 | tee wf01.log
+          if ! grep -q "✓.*Layer 3 (DB-Trigger)" wf01.log; then
+            echo "Layer-3-Test wurde uebersprungen — SQL-Bypass nicht geprueft." >&2
+            exit 1
+          fi
 
       - name: Stop API
         if: always()

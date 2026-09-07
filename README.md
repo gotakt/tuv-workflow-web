@@ -7,7 +7,10 @@ Diese Variante nutzt eine zentrale **MariaDB-Datenbank** über eine
 **Express-API** in `server/index.js`. Die Browser-App spricht nicht direkt mit
 der Datenbank, sondern ausschließlich über HTTP-Endpunkte unter `/api`
 
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](#testing)
+[![E2E](https://img.shields.io/badge/e2e-playwright-2EAD33)](#testing)
+[![Restore](https://img.shields.io/badge/restore-drill%20w%C3%B6chentlich-0A7EA4)](docs/backup.md#4a-der-restore-weg-ist-automatisiert-gepr%C3%BCft)
 [![Lint](https://img.shields.io/badge/eslint-0%20errors-brightgreen)](#testing)
 [![TypeScript](https://img.shields.io/badge/typescript-graduell-blue)](#tech-stack)
 [![Database](https://img.shields.io/badge/db-MariaDB-003545)](#tech-stack)
@@ -74,6 +77,7 @@ Workflow-Regeln, fuehrt SQL gegen MariaDB aus und baut das Schema beim Start
 | Animation | Framer Motion | UI-Transitions |
 | Charts | Recharts | Statistikdiagramme |
 | Tests | Vitest 4, React Testing Library | Unit-, Component-, Hook- und DB-Tests |
+| E2E | Playwright | Journeys durch Browser, API und MariaDB ohne Mocks |
 | Linting | ESLint 9 | Statische Codequalität |
 | Container | Docker Compose | On-Premise-Deployment (MariaDB + API + Frontend in einem Befehl) |
 
@@ -191,8 +195,44 @@ Vorteile dieses Modells:
 - **Volle Kontrolle über Backups** (siehe [docs/backup.md](docs/backup.md)).
 - **Internetausfall** beeintraechtigt den Betrieb nicht.
 
-Auslieferung an einen Kunden: `docker-compose.yml`, `.env`-Vorlage und
-`docs/backup.md` werden übergeben, ein Server-PC bekommt Docker installiert.
+### Auslieferungspaket
+
+Ein Kunde bekommt kein Repository, sondern ein versioniertes Paket:
+
+```bash
+./scripts/paket-bauen.sh          # -> dist-paket/tuv-pruefstelle-pro-v1.0.0.tar.gz
+```
+
+Darin: `docker-compose.yml`, das gebaute Frontend, die API, die Backup- und
+Restore-Skripte, `INSTALLATION.md`, `SECURITY.md`, `docs/backup.md`, eine
+`VERSION`-Datei mit Commit-Stand und `PRUEFSUMMEN.txt` über jede einzelne
+Datei. Kein Frontend-Quellcode, keine Tests, keine Projektunterlagen.
+
+Ein Tag `v*` baut dasselbe Paket in der CI, prüft es nach dem Auspacken
+gegen die Prüfsummen und hängt es an ein GitHub-Release
+(`.github/workflows/release.yml`). Das Release bleibt ein Entwurf, bis ein
+Mensch es veröffentlicht.
+
+Versionen und Migrationshinweise: [CHANGELOG.md](CHANGELOG.md).
+
+### Backup und Wiederherstellung
+
+```bash
+./scripts/backup.sh                      # verschlüsselter Dump nach ./backups
+./scripts/backup.sh --ziel /mnt/nas/tuv  # zweites Medium
+./scripts/restore.sh                     # neuestes Backup zurückspielen
+./scripts/restore.sh --ziel-db tuv_probe backups/taeglich/<datei>   # Probe
+```
+
+Der Restore prüft die Prüfsumme **vor** dem Überschreiben und danach, ob der
+WF-01-Trigger wieder da ist — ein Dump ohne Trigger spielt sich fehlerfrei
+ein und ließe die Datenbank ohne ihre Schutzschicht zurück.
+
+Dass dieser Weg funktioniert, ist keine Behauptung: `restore-drill.sh` legt
+ein Backup an, **löscht die Datenbank**, stellt sie wieder her und vergleicht
+einen normalisierten Fingerabdruck — mit Gegenprobe, dass ein beschädigtes
+Backup abgelehnt wird. Läuft wöchentlich in der CI. Details:
+[docs/backup.md](docs/backup.md).
 
 ## Benutzer & Rollen
 
@@ -256,27 +296,52 @@ Die wichtigsten Integritätsregeln liegen in MariaDB:
 ## Testing
 
 ```powershell
-npm test
+npm test            # Unit-, Component-, Hook- und Server-Tests (Vitest)
 npm run test:watch
+npm run e2e         # End-to-End im Browser (Playwright, startet API + Vite selbst)
 npm run lint
 npm run typecheck
 npm run build
+npm run restore-drill   # Backup → DROP DATABASE → Restore → Vergleich
 ```
 
-Aktueller Stand dieser Arbeitskopie:
+### Drei Ebenen, drei verschiedene Fehlerklassen
 
-- `npm run lint`, `npm run typecheck` und `npm run build` laufen ohne Fehler.
-- Frontend- und Unit-Tests laufen lokal vollständig — inklusive
-  UI-Flow-Tests (`src/tests/flows/`), Auth-Unit-Tests
-  (`server/tests/auth.test.js`) und serverseitiger Validierungs-Tests
-  (`server/tests/validate.test.js`).
-- Die WF-01-Integrationstests laufen in der GitHub-Actions-CI gegen einen
-  echten MariaDB-Service (siehe `.github/workflows/ci.yml`); zusätzlich
-  läuft CodeQL.
-- Ein direkter SQL-Bypass-Test setzt einen laufenden lokalen Compose-Stack
-  voraus und wird sonst übersprungen.
-- API-Healthcheck gegen MariaDB erfolgreich; `/api/fahrzeuge` liest Daten
-  aus MariaDB.
+| Ebene | Ort | Findet |
+|---|---|---|
+| Unit / Component / Flow | `src/tests/` | Logikfehler, kaputte Verdrahtung in der Oberfläche (gegen einen gemockten API-Client) |
+| Server-Integration | `server/tests/` | API-Semantik, Rechte, Validierung, WF-01 gegen eine echte MariaDB |
+| End-to-End | `e2e/` | Vertragsbrüche zwischen Frontend und API — die sieht keine der beiden anderen Ebenen |
+
+Die E2E-Journeys decken ab: Anmeldung und Abmeldung, den Prüfablauf
+(Termin → Mangel → Ergebnis mit WF-01), die Rollenrechte, Fahrzeug- und
+Terminanlage, Berichte und Statistik sowie die Bedienung im Tablet-Viewport.
+Sie laufen mit eingeschalteter Authentifizierung gegen eine eigene
+Datenbank (`tuv_e2e`) und eigene Ports — ein laufender Entwicklungs-Server
+wird nicht angefasst.
+
+### Stand
+
+- `npm run lint` (0 Fehler), `npm run typecheck` und `npm run build` laufen
+  sauber.
+- 256 Vitest-Tests; mit erreichbarer Datenbank laufen davon 254, zwei sind
+  Platzhalter für den übersprungenen Fall.
+- 24 Playwright-Journeys in zwei Projekten (Desktop-Chromium und
+  Tablet-Viewport).
+- **Alle drei WF-01-Verteidigungsschichten laufen in der CI** — auch die
+  dritte, die rohes SQL an der API vorbei gegen den Datenbank-Trigger
+  schickt. Sie war früher auf `docker exec` verdrahtet und in der Pipeline
+  ausgenommen; `server/tests/dbCli.js` wählt den Zugriffsweg jetzt zur
+  Laufzeit. Ein eigener CI-Schritt schlägt fehl, falls dieser Test doch
+  einmal still übersprungen würde.
+- Der Restore-Weg wird wöchentlich automatisiert geprüft
+  (`.github/workflows/restore-drill.yml`) — inklusive Gegenprobe, dass ein
+  beschädigtes Backup abgelehnt wird.
+- Zusätzlich CodeQL und Dependabot.
+
+Voraussetzung für die Server- und E2E-Tests ist eine erreichbare MariaDB:
+`docker compose up -d db`, ein lokal installierter Server oder der
+CI-Service.
 
 ## Projekt-Struktur
 
@@ -302,10 +367,22 @@ src/
   utils/                Validatoren und Datumsfunktionen
   tests/                Vitest-Tests (inkl. UI-Flow-Tests in tests/flows/)
 
+e2e/                    Playwright-Journeys (echter Browser, echte API, echte DB)
+  hilfen.js             Login, Demodaten, Zeilen-Selektoren
+
+scripts/                Betriebs-Skripte
+  backup.sh             verschlüsselter Dump mit Rotation
+  restore.sh            Restore mit Prüfsummen- und Trigger-Kontrolle
+  restore-drill.sh      Backup → DROP DATABASE → Restore → Vergleich
+  paket-bauen.sh        Auslieferungspaket
+  lib/db.sh             DB-Zugriff (Docker / Client / CI)
+
+tools/                  Einmal-Werkzeuge, nicht Teil des Betriebs
 docs/                   Projekt- und Abgabedokumentation
 docs/decisions/         Architecture Decision Records
+docs/praesentation/     Abschlusspräsentationen (Uni-Abgabe)
 src-tauri/              Tauri/Rust-Desktop-Shell
-.github/workflows/      CI/CD-Pipelines
+.github/workflows/      CI/CD-Pipelines (ci, e2e, restore-drill, release, codeql)
 ```
 
 Die aktive Persistenz liegt in `server/db.js`/`server/migrations.js` und
@@ -315,6 +392,8 @@ MariaDB.
 
 | Datei | Inhalt |
 |---|---|
+| [CHANGELOG.md](CHANGELOG.md) | Versionen, Änderungen, Migrationshinweise |
+| [SECURITY.md](SECURITY.md) | Bedrohungsmodell, Rechte, Geheimnisse — und die bekannten Grenzen |
 | [docs/mariadb-setup.md](docs/mariadb-setup.md) | Lokales MariaDB-Setup (Docker und manuell) |
 | [docs/backup.md](docs/backup.md) | 3-Tier-Backup-Strategie für On-Premise-Betrieb |
 | [docs/design.md](docs/design.md) | Architektur, Schichten, Datenfluss und Deployment |

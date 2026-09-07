@@ -1,0 +1,202 @@
+name: Release
+
+# Ein Tag v1.2.3 erzeugt ein GitHub-Release mit dem Auslieferungspaket.
+#
+#   git tag -a v1.0.0 -m "..." && git push origin v1.0.0
+#
+# Bewusst NICHT automatisch bei jedem Push auf master: eine Version ist eine
+# Zusage an den Betreiber ("das kannst du installieren"), keine Nebenwirkung
+# eines Merges. Der Tag ist die bewusste Entscheidung dafuer.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version zum Testen des Paketbaus, z. B. v1.0.0-test"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Paket bauen und veroeffentlichen
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: tuv_release
+          MARIADB_USER: tuv_app
+          MARIADB_PASSWORD: tuv_app_pw
+          MARIADB_ROOT_PASSWORD: ci_root_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=30s
+
+    env:
+      MARIADB_HOST: 127.0.0.1
+      MARIADB_PORT: 3306
+      MARIADB_USER: tuv_app
+      MARIADB_PASSWORD: tuv_app_pw
+      MARIADB_DATABASE: tuv_release
+      API_PORT: 8787
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install MariaDB client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mariadb-client
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Der Tag sagt "v1.2.3", package.json muss dasselbe sagen. Sonst traegt
+      # das ausgelieferte Paket eine andere Version als das Release — und im
+      # Supportfall weiss niemand mehr, was beim Kunden laeuft.
+      - name: Version gegen den Tag pruefen
+        run: |
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.version }}}"
+          PKG="v$(node -p "require('./package.json').version")"
+          echo "Tag: $TAG · package.json: $PKG"
+          case "$TAG" in
+            "$PKG"|"$PKG"-*) ;;
+            *)
+              echo "Tag $TAG passt nicht zu package.json ($PKG)." >&2
+              exit 1
+              ;;
+          esac
+
+      # Ein Release darf nur aus einem Stand entstehen, der die Pruefungen
+      # bestanden hat. Die CI laeuft zwar auf master, aber ein Tag kann auf
+      # jedem Commit sitzen — hier wird es fuer genau diesen Stand geprueft.
+      # Bewusst --omit=dev und erst ab "high": ein Fund in vite oder
+      # @playwright/test landet nie beim Kunden, und ein Release, das an einer
+      # moderate-Meldung in einem Build-Werkzeug scheitert, wird irgendwann
+      # per --force durchgewinkt — dann prueft der Schritt gar nichts mehr.
+      # Was hier rot wird, laeuft dagegen wirklich im Container der Prüfstelle.
+      - name: Audit der Produktions-Abhängigkeiten
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Start API in background
+        run: |
+          node server/index.js &
+          echo $! > api.pid
+          for i in {1..30}; do
+            curl -sf http://localhost:8787/api/health > /dev/null && exit 0
+            sleep 1
+          done
+          echo "API nicht gestartet." >&2
+          exit 1
+
+      - name: Tests
+        run: npm test
+
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f api.pid ]; then kill "$(cat api.pid)" || true; rm -f api.pid; fi
+
+      # Der Restore-Weg gehoert zum Produkt. Ein Release, dessen Backup sich
+      # nicht zurueckspielen laesst, ist kein auslieferbares Release.
+      - name: Restore-Drill
+        env:
+          MARIADB_DATABASE: tuv_drill
+          MARIADB_ROOT_PASSWORD: ci_root_password
+          BACKUP_PASSPHRASE: "release-drill-nur-fuer-synthetische-daten"
+        run: |
+          set -o pipefail
+          MARIADB_DATABASE=tuv_drill node server/index.js &
+          echo $! > api.pid
+          for i in {1..30}; do
+            curl -sf http://localhost:8787/api/health > /dev/null && break
+            sleep 1
+          done
+          curl -sf -X POST http://localhost:8787/api/admin/demo
+          kill "$(cat api.pid)" || true
+          ./scripts/restore-drill.sh 2>&1 | tee drill.log
+          grep -q "RESTORE-DRILL BESTANDEN" drill.log
+
+      # Ohne Argument: die Version kommt aus package.json. Der Schritt oben
+      # hat schon sichergestellt, dass sie zum Tag passt — so heisst das
+      # Archiv garantiert genauso, wie der Pruefschritt danach es sucht.
+      - name: Auslieferungspaket bauen
+        run: ./scripts/paket-bauen.sh
+
+      # Gegenprobe an der ausgelieferten Datei selbst, nicht am Bauverzeichnis.
+      - name: Paket auspacken und Pruefsummen verifizieren
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          mkdir -p /tmp/paketprobe
+          tar -xzf "dist-paket/tuv-pruefstelle-pro-v${VERSION}.tar.gz" -C /tmp/paketprobe
+          cd "/tmp/paketprobe/tuv-pruefstelle-pro-v${VERSION}"
+          sha256sum -c PRUEFSUMMEN.txt
+          test -f dist/index.html
+          test -f server/index.js
+          test -f INSTALLATION.md
+          test ! -d server/tests
+
+      # Nur der Abschnitt dieser Version, nicht das ganze Aenderungsprotokoll.
+      # Ein Release, dessen Beschreibung die Historie von zwoelf Versionen
+      # enthaelt, liest niemand.
+      - name: Release-Text aus dem Änderungsprotokoll schneiden
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          awk -v v="## [$VERSION]" '
+            index($0, v) == 1 { drin = 1; print; next }
+            drin && /^## \[/ { exit }
+            drin && /^\[/ { exit }
+            drin { print }
+          ' CHANGELOG.md > release-text.md
+          if [ ! -s release-text.md ]; then
+            echo "Kein Abschnitt für $VERSION in CHANGELOG.md gefunden." >&2
+            exit 1
+          fi
+          cat release-text.md
+
+      # draft: true — das Veroeffentlichen bleibt ein bewusster Klick. Die
+      # Pipeline stellt das Paket bereit, die Entscheidung "das geht so an
+      # Kunden" trifft ein Mensch.
+      - name: Release anlegen
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-paket/*.tar.gz
+            dist-paket/*.sha256
+          body_path: release-text.md
+          draft: true
+          generate_release_notes: false
+
+      - name: Paket als Artefakt sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auslieferungspaket
+          path: dist-paket/
+          retention-days: 30
+          if-no-files-found: ignore

@@ -1,6 +1,6 @@
 # Backup- und Restore-Konzept
 
-Stand: 2026-05-17
+Stand: 2026-09-07
 Architektur: On-Premise pro Prüfstelle, MariaDB lokal.
 
 ## 1. Bedrohungsmodell
@@ -63,10 +63,11 @@ Haus**.
 3. **Kunden-eigene Cloud (Hetzner)** — der Werkstatt-Inhaber besitzt das
    Cloud-Konto. Rechtlich sauber (keine Auftragsverarbeitung beim Software-
    Anbieter), datenschutztechnisch stark.
-4. **Automatischer Restore-Test** — sonntaglich wird ein Backup probeweise auf
-   eine Test-Datenbank zurückgespielt. Schlägt der Restore fehl, geht eine
-   E-Mail an den Werkstatt-Inhaber. So wird ein kaputtes Backup erkannt,
-   bevor es im Ernstfall gebraucht wird.
+4. **Automatischer Restore-Test** — ein Backup wird probeweise
+   zurückgespielt und mit dem Original verglichen. So wird ein kaputtes
+   Backup erkannt, bevor es im Ernstfall gebraucht wird. In der CI läuft das
+   wöchentlich (Abschnitt 4a); am Kundenstandort fehlen dafür noch
+   Zeitsteuerung und Alarmierung (Abschnitt 7).
 5. **Versionierung mit Rotation** — ein Fehler fällt manchmal erst Wochen
    später auf. Mehrere Generationen sind nötig, nicht nur "Backup von
    gestern".
@@ -79,6 +80,46 @@ Haus**.
 - `/backups` ist als Volume in den Container gemounted (siehe
   `docker-compose.yml`).
 - `.gitignore` schließt `/backups` aus.
+- **`scripts/backup.sh`** — Tier 2: verschlüsselter Dump (AES-256-CBC,
+  PBKDF2 mit 200 000 Runden), Rotation 7 täglich / 4 wöchentlich /
+  12 monatlich, Prüfsummen in einer `.meta`-Datei je Sicherung.
+  Ohne gesetzten Schlüssel bricht das Skript ab, statt einen
+  unverschlüsselten Dump mit Kundendaten zu schreiben.
+- **`scripts/restore.sh`** — Ein-Befehl-Restore. Prüft die Prüfsumme
+  **vor** dem Überschreiben und danach, ob der WF-01-Trigger wieder da
+  ist. Rückfrage vor dem Überschreiben der Produktions-Datenbank.
+- **`scripts/restore-drill.sh`** — die Probe aufs Exempel (§ 4a).
+- **`scripts/lib/db.sh`** — gemeinsame Zugriffsschicht; dieselben Skripte
+  laufen gegen den Docker-Stack, gegen die CI-Service-Datenbank und gegen
+  eine lokal installierte MariaDB.
+
+### 4a. Der Restore-Weg ist automatisiert geprüft
+
+`.github/workflows/restore-drill.yml` läuft montags um 04:17 UTC und bei
+jeder Änderung an den Skripten oder am Schema. Der Drill:
+
+1. nimmt einen Fingerabdruck der Datenbank (normalisierter Dump, sha256),
+2. schreibt ein **verschlüsseltes** Backup,
+3. **löscht die Datenbank wirklich** (`DROP DATABASE`, nicht simuliert),
+4. stellt sie aus dem Backup wieder her,
+5. vergleicht den Fingerabdruck — er muss identisch sein,
+6. prüft Zeilenzahlen aller Tabellen, die Existenz des WF-01-Triggers **und
+   dass er greift** (ein gesperrter `UPDATE` muss weiterhin scheitern),
+7. macht die Gegenprobe: ein absichtlich beschädigtes Backup **muss**
+   abgelehnt werden.
+
+Schritt 7 ist der Grund, warum der Drill etwas wert ist. Ein Drill, der nur
+den guten Fall durchläuft, bliebe auch dann grün, wenn die Prüfsummen-
+Kontrolle gar nichts prüft.
+
+Lokal ausführen (gegen eine Wegwerf-Datenbank):
+
+```bash
+MARIADB_DATABASE=tuv_drill ./scripts/restore-drill.sh
+```
+
+Der Drill weigert sich, gegen eine Datenbank zu laufen, deren Name nicht mit
+`tuv_drill` beginnt — er zerstört sie schließlich.
 
 ## 5. Was am Kunden-Standort einmal eingerichtet wird
 
@@ -114,12 +155,31 @@ docker exec -i tuv-mariadb mysqlbinlog `
 docker compose up -d
 ```
 
-Detaillierte Restore-Prozedur folgt in `scripts/restore.sh`.
+Bequemer und mit Prüfsummen-Kontrolle: `./scripts/restore.sh` (siehe Abschnitt 4).
 
-## 7. Offene Punkte
+## 7. Stand der Umsetzung
 
-- [ ] `server/backup.js` — Cron-Skript für Tier 2 (verschlüsselter Dump alle 6h)
-- [ ] `scripts/sync-offsite.sh` — Tier 3 SFTP-Sync zu Hetzner Storage Box
-- [ ] `scripts/restore.sh` — 1-Befehl-Restore mit Timestamp-Parameter
-- [ ] Wochentlicher automatisierter Restore-Test mit Mail-Alarmierung
-- [ ] Kunden-Setup-Skript für Hetzner-Box-Konfiguration
+Erledigt:
+
+- [x] `scripts/backup.sh` — verschlüsselter Dump mit Rotation (Tier 2)
+- [x] `scripts/restore.sh` — Ein-Befehl-Restore mit Prüfsummen-Kontrolle
+- [x] Wöchentlicher automatisierter Restore-Test
+      (`.github/workflows/restore-drill.yml`)
+
+Noch offen:
+
+- [ ] **Zeitsteuerung am Server-PC.** `scripts/backup.sh` läuft heute auf
+      Aufruf. Für den Betrieb muss es alle 6 Stunden gestartet werden —
+      unter Windows per Aufgabenplanung, unter Linux per cron oder
+      systemd-Timer. Das gehört ins Kunden-Setup, nicht ins Repository:
+      Zeitpunkt und Zielpfad hängen vom Standort ab.
+- [ ] `scripts/sync-offsite.sh` — Tier 3, SFTP-Sync zur Hetzner Storage Box
+- [ ] Alarmierung per E-Mail, wenn ein Backup oder ein Restore-Test
+      fehlschlägt. Der CI-Drill meldet sich über GitHub; am Kundenstandort
+      gibt es diesen Kanal nicht.
+- [ ] Point-in-Time-Recovery über die Binary Logs ist konfiguriert
+      (Abschnitt 2, Tier 1), aber **nicht** durch ein Skript unterstützt und
+      nicht automatisiert geprüft. Der Weg in Abschnitt 6 ist Handarbeit.
+
+Bis diese Punkte erledigt sind, gilt: Tier 2 und der Restore-Weg sind
+belegt, Tier 3 und die Alarmierung sind Konzept.

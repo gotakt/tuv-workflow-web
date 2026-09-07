@@ -31,7 +31,7 @@ Es gibt zwei Wege MariaDB bereitzustellen:
 #### Voraussetzungen
 
 - Docker Desktop (Windows/Mac) oder Docker Engine (Linux)
-- Node.js v18+ für das Vite-Frontend
+- Node.js 24 (Active LTS), mindestens Node 22 — Node 20 ist EOL
 
 #### Start
 
@@ -91,6 +91,40 @@ FLUSH PRIVILEGES;
 Falls MariaDB nicht auf demselben Rechner wie die API laeuft, muss der Host im
 User passend gesetzt werden, zum Beispiel `'tuv_app'@'%'` oder ein konkreter
 Servername.
+
+#### macOS mit Homebrew
+
+Auf einem Entwickler-Mac ohne Docker ist das der schnellste Weg zu einer
+Datenbank, gegen die Server-Tests, E2E-Tests und der Restore-Drill laufen
+koennen:
+
+```bash
+brew install mariadb
+brew services start mariadb          # startet MariaDB dauerhaft
+
+mariadb -u root <<'SQL'
+CREATE DATABASE IF NOT EXISTS tuv_workflow
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'tuv_app'@'127.0.0.1' IDENTIFIED BY 'tuv_app_pw';
+CREATE USER IF NOT EXISTS 'tuv_app'@'localhost' IDENTIFIED BY 'tuv_app_pw';
+GRANT ALL PRIVILEGES ON *.* TO 'tuv_app'@'127.0.0.1';
+GRANT ALL PRIVILEGES ON *.* TO 'tuv_app'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+```
+
+`GRANT ALL ON *.*` statt nur auf `tuv_workflow.*`: der Restore-Drill legt
+Wegwerf-Datenbanken an und loescht sie wieder (`tuv_drill`, `tuv_e2e`).
+Auf einem Entwickler-Rechner ist das in Ordnung — **beim Kunden nicht**.
+Dort hat der Anwendungsbenutzer bewusst nur Rechte auf seiner eigenen
+Datenbank, und Backup/Restore laufen ueber `MARIADB_ROOT_PASSWORD`.
+
+Binary-Logging ist bei einer Homebrew-Installation standardmaessig aus.
+Fuer Point-in-Time-Recovery (docs/backup.md, Tier 1) muesste es in
+`/opt/homebrew/etc/my.cnf` eingeschaltet werden; fuer Tests wird es nicht
+gebraucht.
+
+Wieder abschalten: `brew services stop mariadb`.
 
 ## 4. Environment
 

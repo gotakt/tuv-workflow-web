@@ -183,7 +183,7 @@ jobs:
       # Kunden" trifft ein Mensch.
       - name: Release anlegen
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist-paket/*.tar.gz

@@ -130,7 +130,19 @@ jobs:
           BACKUP_PASSPHRASE: "release-drill-nur-fuer-synthetische-daten"
         run: |
           set -o pipefail
-          MARIADB_DATABASE=tuv_drill node server/index.js &
+          # Der Service-Container legt nur tuv_release an und gibt tuv_app auch
+          # nur darauf Rechte. Die Wegwerf-Datenbank fuer den Drill muss
+          # deshalb — genau wie beim Kunden — mit Root-Rechten angelegt und
+          # freigegeben werden; die Anwendung selbst laeuft weiter als tuv_app.
+          # Passwort per MYSQL_PWD statt -p<pw>: sonst steht es in der
+          # Prozessliste (dieselbe Regel wie in scripts/lib/db.sh).
+          MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -h 127.0.0.1 -P 3306 -u root -e "
+            CREATE DATABASE IF NOT EXISTS \`tuv_drill\`
+              CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            GRANT ALL PRIVILEGES ON \`tuv_drill\`.* TO 'tuv_app'@'%';
+            FLUSH PRIVILEGES;"
+
+          node server/index.js &
           echo $! > api.pid
           for i in {1..30}; do
             curl -sf http://localhost:8787/api/health > /dev/null && break

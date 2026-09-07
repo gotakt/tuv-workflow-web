@@ -49,6 +49,10 @@ Wiederherstellungsweg.
 - **Release-Workflow** (`.github/workflows/release.yml`): baut auf einen
   Tag `v*` das Auslieferungspaket, prüft es und hängt es an ein
   GitHub-Release.
+- **Audit-Schranke in CI und Release**: `npm audit --omit=dev
+  --audit-level=high`. Bewusst nur Produktions-Abhängigkeiten und erst ab
+  "high" — ein Fund in einem Build-Werkzeug landet nie beim Kunden, und eine
+  Schranke, die an solchen Meldungen scheitert, wird irgendwann umgangen.
 
 ### Geändert
 
@@ -58,8 +62,21 @@ Wiederherstellungsweg.
   also wurde er dort übersprungen (`TUV_SKIP_SQL_BYPASS`). `server/tests/dbCli.js`
   wählt den Zugriffsweg nun zur Laufzeit. Ein eigener CI-Schritt schlägt fehl,
   falls der Test doch einmal still übersprungen würde.
+- **Laufzeit auf Node 24 (Active LTS).** Das Kunden-Deployment lief auf
+  `node:20-alpine`; Node 20 ist seit dem 30.04.2026 End-of-Life und bekommt
+  keine Sicherheitsfixes mehr. Docker-Image, alle CI-Workflows und die
+  Dokumentation stehen jetzt auf Node 24, `engines.node` verlangt mindestens
+  Node 22 (Maintenance LTS bis 04/2027).
+- **Abhängigkeiten aktualisiert**: `npm audit` meldete 11 Schwachstellen,
+  davon 4 in Produktions-Abhängigkeiten (2× high). Betroffen war unter
+  anderem der MariaDB-Treiber selbst (3.5.2 → 3.5.4), nicht nur
+  Build-Werkzeuge. Alle Korrekturen lagen innerhalb der bestehenden
+  Semver-Bereiche, `package.json` blieb unverändert. Danach 0 Funde.
 - `src-tauri`: Version auf 1.0.0, Repository-URL auf das umbenannte
   GitHub-Konto (`gotakt`) korrigiert.
+- `docker-compose.yml`: Der Kopfkommentar nannte Port 5173 als Zugang für
+  Mitarbeiter. Das stimmte nicht — beim Kunden liefert die API das gebaute
+  Frontend unter 8787 mit aus, 5173 ist der Entwicklungsserver.
 
 ### Bekannte Grenzen
 

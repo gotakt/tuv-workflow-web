@@ -44,10 +44,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node 20
+      - name: Setup Node 24
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       # Der Layer-3-Test in wf01.test.js schickt rohes SQL an der API vorbei
@@ -61,6 +61,14 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Bewusst --omit=dev und erst ab "high": ein Fund in vite oder
+      # @playwright/test landet nie beim Kunden, und ein Release, das an einer
+      # moderate-Meldung in einem Build-Werkzeug scheitert, wird irgendwann
+      # per --force durchgewinkt — dann prueft der Schritt gar nichts mehr.
+      # Was hier rot wird, laeuft dagegen wirklich im Container der Prüfstelle.
+      - name: Audit der Produktions-Abhängigkeiten
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Lint
         run: npm run lint
@@ -150,10 +158,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node 20
+      - name: Setup Node 24
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies

@@ -5,7 +5,9 @@
 #
 # Architektur: jede Prüfstelle betreibt diese Compose-Datei auf einem Server-PC
 # im lokalen Netzwerk. Mitarbeiter (Empfang, Prüfer, Chef) verbinden sich über
-# WLAN/LAN mit http://<server-ip>:8787 (API) bzw. http://<server-ip>:5173 (Web).
+# WLAN/LAN mit http://<server-ip>:8787 — die API liefert das gebaute Frontend
+# aus `dist/` gleich mit aus. Port 5173 ist der Vite-Entwicklungsserver und
+# läuft beim Kunden nicht.
 #
 # Daten verlassen die Werkstatt nie. Backup-Strategie: siehe docs/backup.md.
 
@@ -38,7 +40,7 @@ services:
       start_period: 30s
 
   api:
-    image: node:20-alpine
+    image: node:24-alpine
     container_name: tuv-api
     restart: unless-stopped
     working_dir: /app

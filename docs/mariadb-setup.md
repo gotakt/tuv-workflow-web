@@ -31,7 +31,7 @@ Es gibt zwei Wege MariaDB bereitzustellen:
 #### Voraussetzungen
 
 - Docker Desktop (Windows/Mac) oder Docker Engine (Linux)
-- Node.js v18+ für das Vite-Frontend
+- Node.js 24 (Active LTS), mindestens Node 22 — Node 20 ist EOL
 
 #### Start
 

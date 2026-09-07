@@ -93,7 +93,8 @@ verfügbar ist.
 #### Voraussetzungen
 
 - Docker Desktop (Windows/Mac) oder Docker Engine (Linux)
-- Node.js v18+ (nur für das Vite-Frontend)
+- Node.js 24 (Active LTS). Node 20 ist seit dem 30.04.2026 End-of-Life
+  und bekommt keine Sicherheitsfixes mehr; Minimum ist Node 22.
 
 #### Setup
 
@@ -143,7 +144,7 @@ Invoke-RestMethod -Method Post -Headers @{ "X-Admin-Token" = "<ADMIN_TOKEN>" } h
 
 #### Voraussetzungen
 
-- Node.js v18+
+- Node.js 24 (Active LTS), mindestens Node 22
 - Laufender MariaDB-Server auf `127.0.0.1:3306`
 - Optional: Rust für den Tauri-Desktop-Build
 

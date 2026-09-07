@@ -171,6 +171,17 @@ und ein eigener CI-Schritt schlägt fehl, wenn er still übersprungen würde.
 
 ## 8. Abhängigkeiten und Codeprüfung
 
+- **Laufzeit auf einer unterstützten Node-Version.** Produktion und CI
+  laufen auf Node 24 (Active LTS, Sicherheitsfixes bis 04/2028), Minimum ist
+  Node 22 (Maintenance LTS bis 04/2027). Node 20 wird nicht mehr unterstützt
+  — seit dem 30.04.2026 End-of-Life, also ohne Sicherheitsfixes. Eine
+  EOL-Laufzeit im Container beim Kunden ist eine Lücke, die keine
+  Anwendungslogik ausgleicht.
+- **Audit-Schranke** in CI und Release: `npm audit --omit=dev
+  --audit-level=high` bricht den Build ab. Bewusst auf
+  Produktions-Abhängigkeiten begrenzt und erst ab "high" — was in `vite` oder
+  Playwright gefunden wird, läuft nie im Container der Prüfstelle, und eine
+  Schranke, die daran scheitert, wird irgendwann umgangen statt beachtet.
 - CodeQL (JavaScript/TypeScript) bei jedem Push und wöchentlich
   (`.github/workflows/codeql.yml`).
 - Dependabot für npm-Pakete und GitHub Actions

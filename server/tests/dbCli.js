@@ -14,7 +14,7 @@
  *   2. `docker exec <container> mariadb ...` (Compose-Stack)
  *   3. null — Aufrufer skippt mit klarer Begruendung
  */
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 const HOST = process.env.MARIADB_HOST || "127.0.0.1";
 const PORT = process.env.MARIADB_PORT || "3306";
@@ -60,14 +60,32 @@ function clientRunner(bin) {
   };
 }
 
+// execFileSync statt execSync: kein Shell-Prozess dazwischen, also auch
+// keine Moeglichkeit, dass ein Anfuehrungszeichen im SQL oder ein
+// Sonderzeichen im Passwort aus dem Argument ausbricht. Die alte Fassung in
+// wf01.test.js baute die Kommandozeile als String zusammen und wurde von
+// CodeQL zu Recht als js/command-line-injection gemeldet — mit
+// JSON.stringify als Notbehelf fuer das Quoting. Ein Argument-Array braucht
+// gar kein Quoting.
 function dockerRunner() {
   return {
     label: `docker exec ${CONTAINER}`,
     run: (sql) =>
       capture(() =>
-        execSync(
-          `docker exec -e MYSQL_PWD=${JSON.stringify(PASSWORD)} ${CONTAINER} ` +
-            `mariadb -u ${USER} ${DATABASE} -e ${JSON.stringify(sql)}`,
+        execFileSync(
+          "docker",
+          [
+            "exec",
+            "-e",
+            `MYSQL_PWD=${PASSWORD}`,
+            CONTAINER,
+            "mariadb",
+            "-u",
+            USER,
+            DATABASE,
+            "-e",
+            sql,
+          ],
           { stdio: ["ignore", "pipe", "pipe"] },
         ),
       ),

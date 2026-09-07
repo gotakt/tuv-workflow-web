@@ -27,6 +27,12 @@ praesentation_standalone.html
 # Lokale Backups — niemals committen (enthalten Kundendaten!)
 /backups/
 
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
 # Claude Code
 .claude
 

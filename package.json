@@ -12,7 +12,10 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "backup": "./scripts/backup.sh",
+    "restore": "./scripts/restore.sh",
+    "restore-drill": "./scripts/restore-drill.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",

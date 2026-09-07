@@ -1,0 +1,122 @@
+name: Restore-Drill
+
+# "Wir haben Backups" ist eine Behauptung. Diese Pipeline macht daraus eine
+# nachpruefbare Aussage: sie legt eine Datenbank an, befuellt sie, sichert
+# sie, LOESCHT sie, stellt sie wieder her und vergleicht das Ergebnis mit dem
+# Original — inklusive der Gegenprobe, dass ein beschaedigtes Backup abgelehnt
+# wird.
+#
+# Der Zeitplan setzt docs/backup.md §7 um ("Woechentlicher automatisierter
+# Restore-Test"): montags 04:17 UTC. Ein kaputter Backup-Pfad faellt damit
+# spaetestens nach einer Woche auf und nicht erst im Ernstfall.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "scripts/**"
+      - "server/migrations.js"
+      - "server/db.js"
+      - ".github/workflows/restore-drill.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "scripts/**"
+      - "server/migrations.js"
+      - "server/db.js"
+      - ".github/workflows/restore-drill.yml"
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  drill:
+    name: Backup → DROP DATABASE → Restore → Vergleich
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: tuv_drill
+          MARIADB_USER: tuv_app
+          MARIADB_PASSWORD: tuv_app_pw
+          MARIADB_ROOT_PASSWORD: ci_root_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=30s
+
+    env:
+      MARIADB_HOST: 127.0.0.1
+      MARIADB_PORT: 3306
+      MARIADB_USER: tuv_app
+      MARIADB_PASSWORD: tuv_app_pw
+      MARIADB_DATABASE: tuv_drill
+      API_PORT: 8787
+      # Backup und Restore laufen — wie beim Kunden (docs/backup.md §6) — mit
+      # Root-Rechten: der Anwendungsbenutzer darf absichtlich kein
+      # DROP/CREATE DATABASE. Die Anwendung selbst startet weiterhin als
+      # tuv_app, sie liest MARIADB_USER/MARIADB_PASSWORD direkt.
+      MARIADB_ROOT_PASSWORD: ci_root_password
+      # Der Drill laeuft gegen den verschluesselten Pfad — das ist der, den
+      # der Kunde benutzt. Ein Drill nur gegen Klartext-Dumps wuerde einen
+      # kaputten Schluessel-Pfad nie bemerken. Der Schluessel ist hier ein
+      # Wegwerf-Wert: es stecken ausschliesslich synthetische Daten drin.
+      BACKUP_PASSPHRASE: "drill-passphrase-nur-fuer-synthetische-daten"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install MariaDB client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mariadb-client
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Die Datenbank wird nicht per SQL-Fixture befuellt, sondern von der
+      # Anwendung selbst: Migrationen, Seeds und WF-01-Trigger entstehen genau
+      # so, wie sie beim Kunden entstehen. Ein Drill gegen ein handgeschriebenes
+      # Schema wuerde einen Fehler in den Migrationen nicht aufdecken.
+      - name: Schema und Demodaten ueber die Anwendung erzeugen
+        run: |
+          node server/index.js &
+          echo $! > api.pid
+          for i in {1..30}; do
+            curl -sf http://localhost:8787/api/health > /dev/null && break
+            sleep 1
+          done
+          curl -sf -X POST http://localhost:8787/api/admin/demo
+          kill "$(cat api.pid)" || true
+
+      # Der Drill wird nur dann als bestanden gemeldet, wenn er es auch sagt.
+      # Exit-Code 0 allein reicht nicht: ein Skript kann Schritte still
+      # ueberspringen und trotzdem sauber enden. Deshalb wird zusaetzlich
+      # geprueft, dass die entscheidenden Zeilen wirklich im Protokoll stehen.
+      - name: Restore-Drill
+        run: |
+          set -o pipefail
+          ./scripts/restore-drill.sh 2>&1 | tee drill.log
+          grep -q "RESTORE-DRILL BESTANDEN" drill.log
+          grep -q "Beschaedigtes Backup korrekt abgelehnt" drill.log
+          grep -q "Trigger greift nach dem Restore" drill.log
+
+      - name: Drill-Protokoll sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: restore-drill-log
+          path: drill.log
+          retention-days: 30
+          if-no-files-found: ignore

@@ -73,8 +73,15 @@ jobs:
       # das ausgelieferte Paket eine andere Version als das Release — und im
       # Supportfall weiss niemand mehr, was beim Kunden laeuft.
       - name: Version gegen den Tag pruefen
+        env:
+          EINGABE_VERSION: ${{ github.event.inputs.version }}
         run: |
-          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.version }}}"
+          # Bei einem Tag-Push ist GITHUB_REF_NAME die Version. Bei
+          # workflow_dispatch ist es der Branch ("master") — dann zaehlt die
+          # Eingabe. Die frueher hier stehende Reihenfolge
+          # ${GITHUB_REF_NAME:-<eingabe>} griff nie auf die Eingabe zurueck,
+          # weil GITHUB_REF_NAME auch bei dispatch gesetzt ist.
+          TAG="${EINGABE_VERSION:-$GITHUB_REF_NAME}"
           PKG="v$(node -p "require('./package.json').version")"
           echo "Tag: $TAG · package.json: $PKG"
           case "$TAG" in

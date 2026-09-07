@@ -120,3 +120,95 @@ jobs:
           path: drill.log
           retention-days: 30
           if-no-files-found: ignore
+
+  # Zweiter Durchlauf ueber den anderen Zugriffsweg. Grund: der Job oben
+  # benutzt den MariaDB-Client, und genau deshalb blieb monatelang unbemerkt,
+  # dass der Container-Weg gar nicht funktionierte — seine Verbindungsprobe
+  # fragte ohne Passwort an. Auf einem Kunden-Server-PC, wo kein Client
+  # installiert ist, haette das bedeutet: kein Backup, kein Restore.
+  #
+  # Hier wird der Weg per TUV_DB_MODUS=docker erzwungen, damit er auch dann
+  # geprueft wird, wenn auf dem Runner ein Client herumliegt.
+  drill-docker:
+    name: Derselbe Drill über den docker-exec-Pfad
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: tuv_drill
+          MARIADB_USER: tuv_app
+          MARIADB_PASSWORD: tuv_app_pw
+          MARIADB_ROOT_PASSWORD: ci_root_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=30s
+
+    env:
+      MARIADB_HOST: 127.0.0.1
+      MARIADB_PORT: 3306
+      MARIADB_USER: tuv_app
+      MARIADB_PASSWORD: tuv_app_pw
+      MARIADB_DATABASE: tuv_drill
+      MARIADB_ROOT_PASSWORD: ci_root_password
+      API_PORT: 8787
+      BACKUP_PASSPHRASE: "drill-passphrase-nur-fuer-synthetische-daten"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # Bewusst KEIN mariadb-client: dieser Job soll ohne ihn auskommen,
+      # genau wie der Server-PC beim Kunden.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Schema und Demodaten ueber die Anwendung erzeugen
+        run: |
+          node server/index.js &
+          echo $! > api.pid
+          for i in {1..30}; do
+            curl -sf http://localhost:8787/api/health > /dev/null && break
+            sleep 1
+          done
+          curl -sf -X POST http://localhost:8787/api/admin/demo
+          kill "$(cat api.pid)" || true
+
+      - name: Drill über docker exec
+        env:
+          TUV_DB_MODUS: docker
+        run: |
+          set -o pipefail
+          CONTAINER="$(docker ps --filter 'ancestor=mariadb:11.4' --format '{{.Names}}' | head -1)"
+          if [ -z "$CONTAINER" ]; then
+            echo "Service-Container nicht gefunden — der Test wuerde nichts pruefen." >&2
+            exit 1
+          fi
+          echo "Container: $CONTAINER"
+          TUV_DB_CONTAINER="$CONTAINER" ./scripts/restore-drill.sh 2>&1 | tee drill-docker.log
+          # Beweis, dass wirklich der Container-Weg benutzt wurde und der Job
+          # nicht heimlich ueber einen Client gelaufen ist.
+          grep -q "Zugriff   : docker exec" drill-docker.log
+          grep -q "RESTORE-DRILL BESTANDEN" drill-docker.log
+          grep -q "Beschaedigtes Backup korrekt abgelehnt" drill-docker.log
+
+      - name: Drill-Protokoll sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: restore-drill-docker-log
+          path: drill-docker.log
+          retention-days: 30
+          if-no-files-found: ignore

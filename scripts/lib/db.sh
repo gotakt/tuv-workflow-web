@@ -34,12 +34,26 @@ fi
 # MariaDB 12 haelt eine MYSQL_PWD-Anmeldung faelschlich fuer passwortlos und
 # schreibt bei jedem Aufruf eine SSL-Warnung nach stderr — genau dorthin, wo
 # die Skripte auf echte Fehler achten.
-DB_OPT_DATEI="$(mktemp "${TMPDIR:-/tmp}/tuv-db-XXXXXX")"
-chmod 600 "$DB_OPT_DATEI"
-printf '[client]\npassword=%s\n' "$MARIADB_PASSWORD" > "$DB_OPT_DATEI"
+#
+# Die Datei entsteht beim ersten Zugriff, nicht schon beim Sourcen: sonst
+# haelt sie den Passwort-Stand von genau dem Moment fest, in dem db.sh
+# eingebunden wurde. Wer die Datei einbindet und MARIADB_PASSWORD erst danach
+# setzt, bekaeme sonst einen Client-Weg mit dem falschen Passwort — und weil
+# der Docker-Weg die Variablen erst beim Aufruf liest, faellt die Erkennung
+# still auf Docker zurueck statt einen Fehler zu melden.
+DB_OPT_DATEI=""
+
+db_optdatei() {
+  if [ -z "$DB_OPT_DATEI" ]; then
+    DB_OPT_DATEI="$(mktemp "${TMPDIR:-/tmp}/tuv-db-XXXXXX")"
+    chmod 600 "$DB_OPT_DATEI"
+    printf '[client]\npassword=%s\n' "$MARIADB_PASSWORD" > "$DB_OPT_DATEI"
+  fi
+  echo "$DB_OPT_DATEI"
+}
 
 # Muss vom aufrufenden Skript im EXIT-Trap aufgerufen werden.
-db_cleanup() { rm -f "$DB_OPT_DATEI"; }
+db_cleanup() { [ -n "$DB_OPT_DATEI" ] && rm -f "$DB_OPT_DATEI"; return 0; }
 
 DB_MODE=""
 DB_CLIENT=""
@@ -48,11 +62,19 @@ DB_DUMPER=""
 db_erkennen() {
   [ -n "$DB_MODE" ] && return 0
 
-  # 1. Direkter Client (CI, lokales Setup)
+  # TUV_DB_MODUS=docker ueberspringt den Client-Weg. Klingt nach einer
+  # Bequemlichkeit, ist aber der Grund, warum der Docker-Zweig ueberhaupt
+  # pruefbar ist: auf jeder Maschine mit installiertem Client gewinnt sonst
+  # immer Weg 1, und der Container-Weg laeuft nirgends. Genau so ist er
+  # einmal unbemerkt kaputtgegangen — die Probe fragte ohne Passwort an und
+  # scheiterte still, was auf einem Server-PC ohne Client bedeutet haette:
+  # kein Backup, kein Restore.
   local client dumper
+  if [ "${TUV_DB_MODUS:-}" != "docker" ]; then
+  # 1. Direkter Client (CI, lokales Setup)
   for client in mariadb mysql; do
     if command -v "$client" > /dev/null 2>&1 &&
-      "$client" --defaults-extra-file="$DB_OPT_DATEI" \
+      "$client" --defaults-extra-file="$(db_optdatei)" \
         -h "$MARIADB_HOST" -P "$MARIADB_PORT" -u "$MARIADB_USER" \
         -e "SELECT 1;" > /dev/null 2>&1; then
       for dumper in mariadb-dump mysqldump; do
@@ -65,11 +87,19 @@ db_erkennen() {
       done
     fi
   done
+  fi
 
   # 2. Docker-Container (Compose-Stack beim Kunden)
+  #
+  # -e MYSQL_PWD: die Probe muss sich genauso anmelden wie die spaeteren
+  # Aufrufe. Ohne das schlaegt sie mit "Access denied (using password: NO)"
+  # fehl, db_erkennen faellt durch, und die Skripte melden "Keine Verbindung
+  # zur Datenbank" — auf einem Server-PC ohne eigenen MariaDB-Client also
+  # immer. Genau das ist der Normalfall beim Kunden: der Compose-Stack
+  # bringt keinen Client auf den Host mit.
   if command -v docker > /dev/null 2>&1 &&
-    docker exec "$TUV_DB_CONTAINER" mariadb -u "$MARIADB_USER" \
-      -e "SELECT 1;" > /dev/null 2>&1; then
+    docker exec -e MYSQL_PWD="$MARIADB_PASSWORD" "$TUV_DB_CONTAINER" \
+      mariadb -u "$MARIADB_USER" -e "SELECT 1;" > /dev/null 2>&1; then
     DB_MODE="docker"
     return 0
   fi
@@ -98,7 +128,7 @@ db_sql() {
     docker exec -e MYSQL_PWD="$MARIADB_PASSWORD" "$TUV_DB_CONTAINER" \
       mariadb -u "$MARIADB_USER" -N -B "$datenbank" -e "$sql"
   else
-    "$DB_CLIENT" --defaults-extra-file="$DB_OPT_DATEI" \
+    "$DB_CLIENT" --defaults-extra-file="$(db_optdatei)" \
       -h "$MARIADB_HOST" -P "$MARIADB_PORT" -u "$MARIADB_USER" \
       -N -B "$datenbank" -e "$sql"
   fi
@@ -112,7 +142,7 @@ db_sql_server() {
     docker exec -e MYSQL_PWD="$MARIADB_PASSWORD" "$TUV_DB_CONTAINER" \
       mariadb -u "$MARIADB_USER" -N -B -e "$sql"
   else
-    "$DB_CLIENT" --defaults-extra-file="$DB_OPT_DATEI" \
+    "$DB_CLIENT" --defaults-extra-file="$(db_optdatei)" \
       -h "$MARIADB_HOST" -P "$MARIADB_PORT" -u "$MARIADB_USER" \
       -N -B -e "$sql"
   fi
@@ -142,7 +172,7 @@ db_dump() {
     docker exec -e MYSQL_PWD="$MARIADB_PASSWORD" "$TUV_DB_CONTAINER" \
       mariadb-dump -u "$MARIADB_USER" "${flags[@]}" "$datenbank"
   else
-    "$DB_DUMPER" --defaults-extra-file="$DB_OPT_DATEI" \
+    "$DB_DUMPER" --defaults-extra-file="$(db_optdatei)" \
       -h "$MARIADB_HOST" -P "$MARIADB_PORT" -u "$MARIADB_USER" \
       "${flags[@]}" "$datenbank"
   fi
@@ -172,7 +202,7 @@ db_fingerprint() {
     docker exec -e MYSQL_PWD="$MARIADB_PASSWORD" "$TUV_DB_CONTAINER" \
       mariadb-dump -u "$MARIADB_USER" "${flags[@]}" "$datenbank"
   else
-    "$DB_DUMPER" --defaults-extra-file="$DB_OPT_DATEI" \
+    "$DB_DUMPER" --defaults-extra-file="$(db_optdatei)" \
       -h "$MARIADB_HOST" -P "$MARIADB_PORT" -u "$MARIADB_USER" \
       "${flags[@]}" "$datenbank"
   fi
@@ -186,7 +216,7 @@ db_import() {
     docker exec -i -e MYSQL_PWD="$MARIADB_PASSWORD" "$TUV_DB_CONTAINER" \
       mariadb -u "$MARIADB_USER" --default-character-set=utf8mb4 "$datenbank"
   else
-    "$DB_CLIENT" --defaults-extra-file="$DB_OPT_DATEI" \
+    "$DB_CLIENT" --defaults-extra-file="$(db_optdatei)" \
       -h "$MARIADB_HOST" -P "$MARIADB_PORT" -u "$MARIADB_USER" \
       --default-character-set=utf8mb4 "$datenbank"
   fi

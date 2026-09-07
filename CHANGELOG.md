@@ -74,6 +74,15 @@ Wiederherstellungsweg.
   Semver-Bereiche, `package.json` blieb unverändert. Danach 0 Funde.
 - `src-tauri`: Version auf 1.0.0, Repository-URL auf das umbenannte
   GitHub-Konto (`gotakt`) korrigiert.
+- **Backup und Restore funktionieren jetzt auch ohne MariaDB-Client auf dem
+  Host** — also im Normalfall beim Kunden. Die Verbindungsprobe für den
+  Container-Weg (`docker exec`) fragte ohne Passwort an und schlug deshalb
+  immer fehl; die Skripte meldeten dann "Keine Verbindung zur Datenbank" und
+  verweigerten den Dienst. Auf jedem Rechner mit installiertem Client blieb
+  das unsichtbar, weil dort der andere Weg griff. Zusätzlich lässt sich der
+  Container-Weg per `TUV_DB_MODUS=docker` erzwingen, und ein eigener CI-Job
+  fährt den kompletten Restore-Drill darüber — sonst wäre er weiterhin
+  nirgends geprüft.
 - `docker-compose.yml`: Der Kopfkommentar nannte Port 5173 als Zugang für
   Mitarbeiter. Das stimmte nicht — beim Kunden liefert die API das gebaute
   Frontend unter 8787 mit aus, 5173 ist der Entwicklungsserver.

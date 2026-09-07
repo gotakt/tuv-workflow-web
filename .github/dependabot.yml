@@ -1,0 +1,45 @@
+version: 2
+
+updates:
+  # npm-Abhaengigkeiten. Woechentlich statt taeglich: bei einem Projekt
+  # dieser Groesse erzeugt taeglich mehr Rauschen als Nutzen, und Rauschen
+  # fuehrt dazu, dass auch die wichtigen Aktualisierungen ungelesen bleiben.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+    groups:
+      # Patch- und Minor-Updates der Entwicklungswerkzeuge gebuendelt: die
+      # will man einmal pruefen, nicht in acht einzelnen Pull Requests.
+      entwicklung:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+      produktion-patch:
+        dependency-type: production
+        update-types:
+          - patch
+    # Major-Updates der Laufzeit-Abhaengigkeiten kommen einzeln — bei denen
+    # muss jemand die Migrationshinweise lesen, bevor sie in eine Version
+    # gehen, die beim Kunden laeuft.
+
+  # Die Actions in den Workflows sind auch Abhaengigkeiten. Eine veraltete
+  # Action ist kein Schoenheitsfehler: sie laeuft mit Zugriff auf das
+  # Repository und, im Release-Workflow, auf den Release-Token.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Berlin
+    commit-message:
+      prefix: "ci"

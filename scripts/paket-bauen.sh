@@ -160,15 +160,26 @@ fi
 
 # Selbstkontrolle: ein Paket ohne dist/index.html oder ohne server/index.js
 # startet beim Kunden nicht. Lieber hier scheitern als dort.
+#
+# Die Dateiliste wird EINMAL eingelesen und danach ohne Pipe geprueft.
+# `tar ... | grep -q` waere die naheliegende Schreibweise, ist aber kaputt:
+# grep -q beendet sich beim ersten Treffer, tar schreibt in eine geschlossene
+# Pipe und endet unter GNU-tar mit "stdout: write error". Zusammen mit
+# `set -o pipefail` gilt dann die ganze Pruefung als fehlgeschlagen — obwohl
+# die Datei da ist. Unter BSD-tar (macOS) faellt das nicht auf; im
+# Linux-Runner schon.
+ARCHIV_INHALT="$(tar -tzf "$ARCHIV")"
+
 for pflicht in "$NAME/server/index.js" "$NAME/dist/index.html" \
   "$NAME/docker-compose.yml" "$NAME/scripts/restore.sh" "$NAME/INSTALLATION.md"; do
-  tar -tzf "$ARCHIV" | grep -qx "$pflicht" || {
+  if ! grep -qx "$pflicht" <<< "$ARCHIV_INHALT"; then
     echo "FEHLER: $pflicht fehlt im Archiv." >&2
     exit 1
-  }
+  fi
 done
+
 # Und nichts, was dort nicht hingehoert.
-if tar -tzf "$ARCHIV" | grep -qE "/(node_modules|src|\.env)$|/\.env/"; then
+if grep -qE "/(node_modules|src|\.env)$|/\.env/" <<< "$ARCHIV_INHALT"; then
   echo "FEHLER: Archiv enthaelt Dateien, die nicht ausgeliefert werden duerfen." >&2
   exit 1
 fi
@@ -176,4 +187,4 @@ fi
 echo "  Paket    : $ARCHIV"
 echo "  Groesse  : $(wc -c < "$ARCHIV" | tr -d ' ') Bytes"
 echo "  Prüfsumme: $(cat "$AUSGABE/$NAME.tar.gz.sha256")"
-echo "  Dateien  : $(tar -tzf "$ARCHIV" | wc -l | tr -d ' ')"
+echo "  Dateien  : $(grep -c . <<< "$ARCHIV_INHALT")"

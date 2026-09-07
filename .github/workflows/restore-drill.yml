@@ -71,7 +71,7 @@ jobs:
       BACKUP_PASSPHRASE: "drill-passphrase-nur-fuer-synthetische-daten"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node 24
         uses: actions/setup-node@v4
@@ -162,7 +162,7 @@ jobs:
       BACKUP_PASSPHRASE: "drill-passphrase-nur-fuer-synthetische-daten"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node 24
         uses: actions/setup-node@v4

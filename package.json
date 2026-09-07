@@ -30,7 +30,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "framer-motion": "^12.38.0",
-    "helmet": "^8.2.0",
+    "helmet": "^8.3.0",
     "lucide-react": "^1.7.0",
     "mariadb": "^3.5.2",
     "prop-types": "^15.8.1",
